@@ -17,7 +17,7 @@ Splits input into a complete Cargo manifest and unadultered Rust source.
 
 Unless we have prelude items to inject, in which case it will be *slightly* adulterated.
 */
-pub fn split_input(input: &Input, deps: &[(String, String)], prelude_items: &[String]) -> Result<(String, String)> {
+pub fn split_input(input: &Input, deps: &[(String, String)], prelude_items: &[String]) -> Result<(String, String, String)> {
     let (part_mani, source, template, sub_prelude) = match *input {
         Input::File(_, _, content, _) => {
             assert_eq!(prelude_items.len(), 0);
@@ -78,7 +78,15 @@ pub fn split_input(input: &Input, deps: &[(String, String)], prelude_items: &[St
     let mani_str = format!("{}", toml::Value::Table(mani));
     info!("mani_str: {}", mani_str);
 
-    Ok((mani_str, source))
+    let build = {
+        if deps.len() > 0 {
+            consts::BUILDSCRIPT_TEMPLATE.into()
+        } else {
+            "fn main() {}".into()
+        }
+    };
+
+    Ok((mani_str, source, build))
 }
 
 #[test]
@@ -92,7 +100,7 @@ fn test_split_input() {
     let f = |c| Input::File("n", &dummy_path, c, 0);
 
     macro_rules! r {
-        ($m:expr, $r:expr) => (Some(($m.into(), $r.into())));
+        ($m:expr, $r:expr, $b:expr) => (Some(($m.into(), $r.into(), $b.into())));
     }
 
     assert_eq!(si!(f(
@@ -104,13 +112,17 @@ r#"
 name = "n"
 path = "n.rs"
 
+[build-dependencies]
+
 [dependencies]
 
 [package]
 authors = ["Anonymous"]
+build = "build.rs"
 name = "n"
 version = "0.1.0"
 "#,
+r#"fn main() {}"#,
 r#"fn main() {}"#
         )
     );
@@ -127,16 +139,20 @@ r#"
 name = "n"
 path = "n.rs"
 
+[build-dependencies]
+
 [dependencies]
 
 [package]
 authors = ["Anonymous"]
+build = "build.rs"
 name = "n"
 version = "0.1.0"
 "#,
 r#"
 fn main() {}
-"#
+"#,
+r#"fn main() {}"#
         )
     );
 
@@ -153,17 +169,21 @@ r#"
 name = "n"
 path = "n.rs"
 
+[build-dependencies]
+
 [dependencies]
 time = "0.1.25"
 
 [package]
 authors = ["Anonymous"]
+build = "build.rs"
 name = "n"
 version = "0.1.0"
 "#,
 r#"
 fn main() {}
-"#
+"#,
+r#"fn main() {}"#
         )
     );
 
@@ -179,18 +199,22 @@ r#"
 name = "n"
 path = "n.rs"
 
+[build-dependencies]
+
 [dependencies]
 time = "0.1.25"
 
 [package]
 authors = ["Anonymous"]
+build = "build.rs"
 name = "n"
 version = "0.1.0"
 "#,
 r#"
 // Cargo-Deps: time="0.1.25"
 fn main() {}
-"#
+"#,
+r#"fn main() {}"#
         )
     );
 
@@ -213,11 +237,14 @@ r#"
 name = "n"
 path = "n.rs"
 
+[build-dependencies]
+
 [dependencies]
 time = "0.1.25"
 
 [package]
 authors = ["Anonymous"]
+build = "build.rs"
 name = "n"
 version = "0.1.0"
 "#,
@@ -231,7 +258,8 @@ time = "0.1.25"
 ```
 */
 fn main() {}
-"#
+"#,
+r#"fn main() {}"#
         )
     );
 }
@@ -1016,19 +1044,24 @@ Generates a partial Cargo manifest containing the specified dependencies.
 */
 fn deps_manifest(deps: &[(String, String)]) -> Result<toml::Table> {
     let mut mani_str = String::new();
-    mani_str.push_str("[dependencies]\n");
+    let mut dep_str = String::new();
 
     for &(ref name, ref ver) in deps {
-        mani_str.push_str(name);
-        mani_str.push_str("=");
+        dep_str.push_str(name);
+        dep_str.push_str("=");
 
         // We only want to quote the version if it *isn't* a table.
         let quotes = match ver.starts_with("{") { true => "", false => "\"" };
-        mani_str.push_str(quotes);
-        mani_str.push_str(ver);
-        mani_str.push_str(quotes);
-        mani_str.push_str("\n");
+        dep_str.push_str(quotes);
+        dep_str.push_str(ver);
+        dep_str.push_str(quotes);
+        dep_str.push_str("\n");
     }
+
+    mani_str.push_str("[dependencies]\n");
+    mani_str.push_str(&dep_str);
+    mani_str.push_str("[build-dependencies]\n");
+    mani_str.push_str(&dep_str);
 
     toml::Parser::new(&mani_str).parse()
         .ok_or("could not parse dependency manifest".into())

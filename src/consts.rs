@@ -110,6 +110,92 @@ where F: FnMut(&str, usize) -> T, T: 'static {
 }
 "#;
 
+/// The template used for expr/build.rs
+pub const BUILDSCRIPT_TEMPLATE: &'static str = r##"
+use std::fs::{self, File, Permissions};
+use std::os::unix::fs::PermissionsExt;
+use std::process::Command;
+use std::io::{Read, Write};
+
+fn main() {
+    // step 1. create nested project, copy in files
+    fs::create_dir("nested").unwrap();
+    fs::copy("Cargo.toml", "nested/Cargo.toml").unwrap();
+    {
+        let mut file = File::create("nested/expr.rs").unwrap();
+        writeln!(file, "fn main() {{}}").unwrap();
+    }
+    {
+        let mut file = File::create("nested/build.rs").unwrap();
+        writeln!(file, "fn main() {{}}").unwrap();
+    }
+    {
+        let mut file = File::create("nested/rustc_shim.sh").unwrap();
+        writeln!(file, "{}", r#"
+#!/usr/bin/env bash
+
+args=("$@")
+
+while [ $# -ne 0 ]; do
+    case "$1" in
+        --crate-name)
+            shift
+            crate="$1"
+            ;;
+        --extern)
+            shift
+            if [[ "$crate" == "expr" ]]; then
+                echo "EXTERN ${1%=*}"
+            fi
+            ;;
+    esac
+
+    shift
+done
+
+if [[ "$crate" == "expr" ]]; then
+    exit 1
+else
+    rustc "${args[@]}"
+fi
+        "#).unwrap();
+    }
+    fs::set_permissions("nested/rustc_shim.sh", Permissions::from_mode(0o755)).unwrap();
+    Command::new("cp")
+        .arg("-a")
+        .arg("target")
+        .arg("nested")
+        .spawn().unwrap()
+        .wait().unwrap();
+
+    let expr = {
+        let mut file = File::open("expr.rs").unwrap();
+        let mut vec = vec![];
+        file.read_to_end(&mut vec).unwrap();
+        vec
+    };
+    let mut file = File::create("expr.rs").unwrap();
+
+    String::from_utf8(
+        Command::new("cargo")
+            .current_dir("nested")
+            .env("RUSTC", "./rustc_shim.sh")
+            .arg("build")
+            .output()
+            .unwrap()
+            .stdout)
+        .unwrap()
+        .split("\n")
+        .filter(|s| s.starts_with("EXTERN"))
+        .map(|s| s.split(" ").last().unwrap())
+        .map(|s| writeln!(file, "#[allow(unused_attributes)] #[macro_use] extern crate {};", s))
+        .count();
+
+    file.write_all(&expr).unwrap();
+    fs::remove_dir_all("nested").unwrap();
+}
+"##;
+
 /**
 The default manifest used for packages.  `%n` is replaced with the "safe name" of the input, which *should* be safe to use as a file name.
 */
@@ -118,6 +204,7 @@ pub const DEFAULT_MANIFEST: &'static str = r#"
 name = "%n"
 version = "0.1.0"
 authors = ["Anonymous"]
+build = "build.rs"
 
 [[bin]]
 name = "%n"

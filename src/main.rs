@@ -475,7 +475,8 @@ fn gen_pkg_and_compile(
     let meta = &action.metadata;
 
     info!("splitting input...");
-    let (mani_str, script_str) = try!(manifest::split_input(input, &meta.deps, &meta.prelude));
+    let (mani_str, script_str, build_str) = try!(manifest::split_input(input, &meta.deps,
+                                                                       &meta.prelude));
 
     info!("creating pkg dir...");
     try!(fs::create_dir_all(pkg_path));
@@ -501,6 +502,11 @@ fn gen_pkg_and_compile(
         let mut script_f = try!(fs::File::create(script_path));
         try!(write!(&mut script_f, "{}", script_str));
         try!(script_f.flush());
+
+        let build_path = pkg_path.join("build.rs");
+        let mut build_f = try!(fs::File::create(build_path));
+        try!(write!(&mut build_f, "{}", build_str));
+        try!(build_f.flush());
     }
 
     // *bursts through wall* It's Cargo Time! (Possibly)
